@@ -174,12 +174,20 @@ def get_participants(
     db: Session = Depends(get_db)
 ):
     try:
+        print(f"Fetching participants with category_id: {category_id}, event_id: {event_id}")
+        
         # Start with base query including events relationship
-        query = db.query(models.Participant).options(joinedload(models.Participant.events))
+        query = db.query(models.Participant).options(
+            joinedload(models.Participant.events),
+            joinedload(models.Participant.results)
+        )
+        
+        print("Base query created")
         
         # Add category filter if provided
         if category_id:
             query = query.filter(models.Participant.category_id == category_id)
+            print(f"Added category filter: {category_id}")
         
         # Add event filter if provided
         if event_id:
@@ -188,14 +196,21 @@ def get_participants(
                 .join(models.participant_event)
                 .filter(models.participant_event.c.event_id == event_id)
             )
+            print(f"Added event filter: {event_id}")
         
-        # Execute query and get all participants with their events
+        # Execute query and get all participants
         participants = query.all()
-        logger.info(f"Found {len(participants)} participants")
+        print(f"Found {len(participants)} participants")
         
         # Convert to dictionary format
-        result = []
+        participants_list = []
         for participant in participants:
+            # Get results for this participant
+            participant_results = {}
+            if participant.results:
+                for r in participant.results:
+                    participant_results[r.event_id] = r
+            
             participant_dict = {
                 "id": participant.id,
                 "name": participant.name,
@@ -215,12 +230,35 @@ def get_participants(
                     "venue": event.venue
                 } for event in participant.events]
             }
-            result.append(participant_dict)
+            
+            # Add result data if available for the selected event
+            if event_id and event_id in participant_results:
+                result_data = participant_results[event_id]
+                participant_dict.update({
+                    "judge1_marks": result_data.judge1_marks,
+                    "judge2_marks": result_data.judge2_marks,
+                    "judge3_marks": result_data.judge3_marks,
+                    "total_marks": result_data.total_marks,
+                    "rank": result_data.rank
+                })
+            else:
+                participant_dict.update({
+                    "judge1_marks": None,
+                    "judge2_marks": None,
+                    "judge3_marks": None,
+                    "total_marks": None,
+                    "rank": None
+                })
+            
+            participants_list.append(participant_dict)
         
-        return result
+        print(f"Returning {len(participants_list)} participants")
+        return participants_list
 
     except Exception as e:
-        logger.error(f"Error fetching participants: {str(e)}")
+        print(f"Error in get_participants: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching participants: {str(e)}"
@@ -302,33 +340,25 @@ def create_results(results: List[schemas.ResultCreate], db: Session = Depends(ge
     try:
         # Create all results first
         db_results = []
+        print("Received results data:", results)  # Debug print
+        
         for result in results:
-            # Calculate total marks
-            total_marks = result.judge1_marks + result.judge2_marks + result.judge3_marks
+            print(f"Saving result - Participant ID: {result.participant_id}, Event ID: {result.event_id}")
+            print(f"Marks - Judge1: {result.judge1_marks}, Judge2: {result.judge2_marks}, Judge3: {result.judge3_marks}")
+            print(f"Total Marks: {result.total_marks}, Rank: {result.rank}")
             
-            # Create new result
+            # Create new result using the provided total_marks and rank
             db_result = models.Result(
-                **result.dict(),
-                total_marks=total_marks,
-                rank=0  # Will be updated after saving all
+                participant_id=result.participant_id,
+                event_id=result.event_id,
+                judge1_marks=result.judge1_marks,
+                judge2_marks=result.judge2_marks,
+                judge3_marks=result.judge3_marks,
+                total_marks=result.total_marks,
+                rank=result.rank
             )
             db.add(db_result)
             db_results.append(db_result)
-        
-        db.commit()
-        
-        # Now update ranks for each event
-        event_ids = set(result.event_id for result in results)
-        for event_id in event_ids:
-            event_results = (
-                db.query(models.Result)
-                .filter(models.Result.event_id == event_id)
-                .order_by(models.Result.total_marks.desc())
-                .all()
-            )
-            
-            for rank, r in enumerate(event_results, 1):
-                r.rank = rank
         
         db.commit()
         

@@ -89,7 +89,9 @@ function Results() {
       );
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch participants: ${response.statusText}`);
+        const errorData = await response.json();
+        console.error('Error response:', response.status, errorData);
+        throw new Error(`Failed to fetch participants: ${errorData.detail || response.statusText}`);
       }
       
       const data = await response.json();
@@ -110,22 +112,33 @@ function Results() {
       const initialMarks = {};
       data.forEach(participant => {
         initialMarks[participant.id] = {
-          mark1: participant.mark1 || '',
-          mark2: participant.mark2 || '',
-          mark3: participant.mark3 || ''
+          judge1_marks: participant.judge1_marks || '',
+          judge2_marks: participant.judge2_marks || '',
+          judge3_marks: participant.judge3_marks || '',
+          total_marks: participant.total_marks || '',
+          rank: participant.rank || ''
         };
       });
       
+      console.log('Setting marks:', initialMarks);  // Debug log
       setMarks(initialMarks);
-      setParticipants(data);
+      
+      // Update participants with their total marks and ranks
+      const participantsWithTotals = data.map(participant => ({
+        ...participant,
+        totalMarks: participant.total_marks || '',
+        rank: participant.rank || ''
+      }));
+      
+      setParticipants(participantsWithTotals);
       
       // If we have any saved marks, show a success message
-      if (data.some(p => p.mark1 || p.mark2 || p.mark3)) {
+      if (data.some(p => p.judge1_marks || p.judge2_marks || p.judge3_marks)) {
         showNotification('Loaded saved results successfully', 'success');
       }
     } catch (error) {
       console.error('Error fetching participants:', error);
-      showNotification(`Error fetching participants: ${error.message}`, 'error');
+      showNotification(error.message, 'error');
       setParticipants([]);
       setMarks({});
     } finally {
@@ -162,22 +175,19 @@ function Results() {
   const calculateResults = () => {
     const updatedParticipants = participants.map(participant => {
       const participantMarks = marks[participant.id] || {};
-      const mark1 = parseFloat(participantMarks.mark1) || 0;
-      const mark2 = parseFloat(participantMarks.mark2) || 0;
-      const mark3 = parseFloat(participantMarks.mark3) || 0;
-      const totalMarks = parseFloat((mark1 + mark2 + mark3).toFixed(2));
-
+      const judge1 = parseFloat(participantMarks.judge1_marks) || 0;
+      const judge2 = parseFloat(participantMarks.judge2_marks) || 0;
+      const judge3 = parseFloat(participantMarks.judge3_marks) || 0;
+      const totalMarks = judge1 + judge2 + judge3;
+      
       return {
         ...participant,
-        mark1,
-        mark2,
-        mark3,
-        totalMarks
+        totalMarks,
+        judge1_marks: judge1,
+        judge2_marks: judge2,
+        judge3_marks: judge3
       };
     });
-
-    // Sort by total marks in descending order
-    updatedParticipants.sort((a, b) => b.totalMarks - a.totalMarks);
 
     // Group participants by total marks
     const markGroups = {};
@@ -204,6 +214,20 @@ function Results() {
         currentPosition += participantsInGroup.length;
       });
 
+    // Update marks state with total marks
+    const updatedMarks = { ...marks };
+    updatedParticipants.forEach(participant => {
+      updatedMarks[participant.id] = {
+        ...updatedMarks[participant.id],
+        judge1_marks: participant.judge1_marks,
+        judge2_marks: participant.judge2_marks,
+        judge3_marks: participant.judge3_marks,
+        total_marks: participant.totalMarks,
+        rank: participant.rank
+      };
+    });
+
+    setMarks(updatedMarks);
     setParticipants(updatedParticipants);
     showNotification('Results calculated successfully', 'success');
   };
@@ -211,13 +235,23 @@ function Results() {
   const saveResults = async () => {
     try {
       setLoading(true);
-      const resultsData = participants.map(participant => ({
-        participant_id: participant.id,
-        event_id: parseInt(selectedEvent),
-        judge1_marks: parseFloat(marks[participant.id]?.mark1) || 0,
-        judge2_marks: parseFloat(marks[participant.id]?.mark2) || 0,
-        judge3_marks: parseFloat(marks[participant.id]?.mark3) || 0
-      }));
+      const resultsData = participants.map(participant => {
+        const participantMarks = marks[participant.id] || {};
+        const judge1_marks = parseFloat(participantMarks.judge1_marks) || 0;
+        const judge2_marks = parseFloat(participantMarks.judge2_marks) || 0;
+        const judge3_marks = parseFloat(participantMarks.judge3_marks) || 0;
+        const total_marks = judge1_marks + judge2_marks + judge3_marks;
+        
+        return {
+          participant_id: participant.id,
+          event_id: parseInt(selectedEvent),
+          judge1_marks,
+          judge2_marks,
+          judge3_marks,
+          total_marks,
+          rank: participant.rank || 0
+        };
+      });
 
       console.log('Saving results:', resultsData); // Debug log
 
@@ -229,18 +263,30 @@ function Results() {
         body: JSON.stringify(resultsData),
       });
 
-      const responseData = await response.json();
-      console.log('Response:', response.status, responseData); // Debug log
-
       if (!response.ok) {
+        const responseData = await response.json();
+        console.log('Error response:', response.status, responseData); // Debug log
         throw new Error(responseData.detail || 'Failed to save results');
       }
 
+      const responseData = await response.json();
       console.log('Results saved:', responseData); // Debug log
+      
+      // Update local state with saved results
+      const updatedParticipants = participants.map(participant => {
+        const savedResult = resultsData.find(r => r.participant_id === participant.id);
+        return {
+          ...participant,
+          totalMarks: savedResult.total_marks,
+          rank: savedResult.rank
+        };
+      });
+      
+      setParticipants(updatedParticipants);
       showNotification('Results saved successfully', 'success');
       
       // Refresh the participants list to show updated marks
-      fetchParticipants();
+      await fetchParticipants();
     } catch (error) {
       console.error('Error saving results:', error);
       // Extract the most meaningful error message
@@ -262,9 +308,9 @@ function Results() {
           'Name': participant.name,
           'Category': selectedCategoryName,
           'Event': selectedEventName,
-          'Mark 1': marks[participant.id]?.mark1 || 0,
-          'Mark 2': marks[participant.id]?.mark2 || 0,
-          'Mark 3': marks[participant.id]?.mark3 || 0,
+          'Judge 1 Marks': marks[participant.id]?.judge1_marks || 0,
+          'Judge 2 Marks': marks[participant.id]?.judge2_marks || 0,
+          'Judge 3 Marks': marks[participant.id]?.judge3_marks || 0,
           'Total Marks': participant.totalMarks || 0,
           'Rank': participant.rank || '-'
         }))
@@ -346,9 +392,9 @@ function Results() {
                   <TableRow>
                     <TableCell>Chest Number</TableCell>
                     <TableCell>Name</TableCell>
-                    <TableCell align="right">Mark 1</TableCell>
-                    <TableCell align="right">Mark 2</TableCell>
-                    <TableCell align="right">Mark 3</TableCell>
+                    <TableCell align="right">Judge 1 Marks</TableCell>
+                    <TableCell align="right">Judge 2 Marks</TableCell>
+                    <TableCell align="right">Judge 3 Marks</TableCell>
                     <TableCell align="right">Total Marks</TableCell>
                     <TableCell align="right">Rank</TableCell>
                   </TableRow>
@@ -361,8 +407,8 @@ function Results() {
                       <TableCell align="right">
                         <TextField
                           type="number"
-                          value={marks[participant.id]?.mark1 || ''}
-                          onChange={(e) => handleMarksChange(participant.id, 'mark1', e.target.value)}
+                          value={marks[participant.id]?.judge1_marks || ''}
+                          onChange={(e) => handleMarksChange(participant.id, 'judge1_marks', e.target.value)}
                           size="small"
                           inputProps={{ min: 0, max: 100, step: 0.1 }}
                           sx={{ width: 100 }}
@@ -371,8 +417,8 @@ function Results() {
                       <TableCell align="right">
                         <TextField
                           type="number"
-                          value={marks[participant.id]?.mark2 || ''}
-                          onChange={(e) => handleMarksChange(participant.id, 'mark2', e.target.value)}
+                          value={marks[participant.id]?.judge2_marks || ''}
+                          onChange={(e) => handleMarksChange(participant.id, 'judge2_marks', e.target.value)}
                           size="small"
                           inputProps={{ min: 0, max: 100, step: 0.1 }}
                           sx={{ width: 100 }}
@@ -381,8 +427,8 @@ function Results() {
                       <TableCell align="right">
                         <TextField
                           type="number"
-                          value={marks[participant.id]?.mark3 || ''}
-                          onChange={(e) => handleMarksChange(participant.id, 'mark3', e.target.value)}
+                          value={marks[participant.id]?.judge3_marks || ''}
+                          onChange={(e) => handleMarksChange(participant.id, 'judge3_marks', e.target.value)}
                           size="small"
                           inputProps={{ min: 0, max: 100, step: 0.1 }}
                           sx={{ width: 100 }}

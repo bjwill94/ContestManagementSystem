@@ -61,9 +61,9 @@ class Result(Base):
     id = Column(Integer, primary_key=True, index=True)
     participant_id = Column(Integer, ForeignKey("participants.id"))
     event_id = Column(Integer, ForeignKey("events.id"))
-    mark1 = Column(Float, nullable=True)
-    mark2 = Column(Float, nullable=True)
-    mark3 = Column(Float, nullable=True)
+    judge1_marks = Column(Float, nullable=True)
+    judge2_marks = Column(Float, nullable=True)
+    judge3_marks = Column(Float, nullable=True)
     total_marks = Column(Float, nullable=True)
     rank = Column(Integer, nullable=True)
 

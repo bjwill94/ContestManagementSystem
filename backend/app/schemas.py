@@ -62,8 +62,17 @@ class ResultBase(BaseModel):
     judge2_marks: float
     judge3_marks: float
 
-class ResultCreate(ResultBase):
-    pass
+class ResultCreate(BaseModel):
+    participant_id: int
+    event_id: int
+    judge1_marks: float
+    judge2_marks: float
+    judge3_marks: float
+    total_marks: float
+    rank: int
+
+    class Config:
+        orm_mode = True
 
 class Result(ResultBase):
     id: int
